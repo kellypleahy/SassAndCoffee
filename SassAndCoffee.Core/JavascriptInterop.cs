@@ -42,7 +42,7 @@
      * is not only Thread-Unsafe, but also Thread Affinitized.
      */
 
-    public class JavascriptBasedCompiler
+    public class JavascriptBasedCompiler : IDisposable
     {
         static ConcurrentQueue<JSWorkItem> _workQueue = new ConcurrentQueue<JSWorkItem>();
         static readonly Thread _dispatcherThread;
@@ -74,14 +74,14 @@
                             item.Result = engine.Compile(item.Func, item.Input);
                         }
                     } catch (Exception ex) {
+                        // Note: You absolutely cannot let any exceptions bubble up, as it kills the app domain.
+
                         item.Result = String.Format("ENGINE FAULT - please report this if it happens frequently: {0}: {1}\n{2}", ex.GetType(), ex.Message, ex.StackTrace);
 
                         JS.V8FailureReason = ex;
                         if (Environment.Is64BitProcess == false) {
                             engine = new JurassicCompiler();
-                        } else {
-                            throw;
-                        }
+                        }                        
                     }
 
                     item._gate.Set();
@@ -115,6 +115,12 @@
 
         public void Dispose()
         {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
             _workQueue = null;
         }
     }
@@ -147,6 +153,31 @@
         }
     }
 
+#if FALSE
+    public class IronJSCompiler : IV8ScriptCompiler
+    {
+        CSharp.Context _engine;
+        Dictionary<string, Func<string, string>> _compilerFunc = new Dictionary<string, Func<string, string>>();
+
+        public void InitializeLibrary(string libraryCode)
+        {
+            _engine = new CSharp.Context();
+            _engine.Execute(libraryCode);
+        }
+
+        public string Compile(string function, string input)
+        {
+            lock(_engine) {
+                if (!_compilerFunc.ContainsKey(function)) {
+                    _compilerFunc[function] = _engine.GetFunctionAs<Func<string, string>>(function);
+                }
+
+                return _compilerFunc[function](input);
+            }
+        }
+    }
+#endif
+
     public static class JS
     {
         static Lazy<Type> _scriptCompilerImpl;
@@ -168,22 +199,37 @@
         static JS()
         {
             _scriptCompilerImpl = new Lazy<Type>(() => {
+                if (InternetExplorerJavaScriptCompiler.IsSupported) {
+                    return typeof(InternetExplorerJavaScriptCompiler);
+                }
+
                 string suffix = (Environment.Is64BitProcess ? "amd64" : "x86");
                 string assemblyResource = (Environment.Is64BitProcess ?
                     "SassAndCoffee.Core.lib.amd64.V8Bridge.dll" : "SassAndCoffee.Core.lib.x86.V8Bridge.dll");
 
-                var v8Name = Path.Combine(Path.GetTempPath(), String.Format("V8Bridge_{0}.dll", suffix));
-                try {
-                    using (var of = File.OpenWrite(v8Name)) {
-                        Assembly.GetExecutingAssembly().GetManifestResourceStream(assemblyResource).CopyTo(of);
+                var attemptedPaths = new[] {
+                    Path.Combine(Path.GetTempPath(), String.Format("V8Bridge_{0}.dll", suffix)),
+                    Path.Combine(Path.GetFullPath(@".\App_Data"), String.Format("V8Bridge_{0}.dll", suffix)),
+                    Path.Combine(Path.GetFullPath("."), String.Format("V8Bridge_{0}.dll", suffix)),
+                };
+
+                string succeededPath = null;
+                foreach(var path in attemptedPaths) {
+                    try {
+                        using (var of = File.OpenWrite(path)) {
+                            Assembly.GetExecutingAssembly().GetManifestResourceStream(assemblyResource).CopyTo(of);
+                        }
+
+                        succeededPath = path;
+                        break;
+                    } catch (IOException) {
+                    } catch (UnauthorizedAccessException) {
                     }
-                } catch (IOException) {
-                } catch (UnauthorizedAccessException) {
                 }
 
                 Assembly v8Assembly;
                 try {
-                    v8Assembly = Assembly.LoadFile(v8Name);
+                    v8Assembly = Assembly.LoadFile(succeededPath);
                 } catch (Exception ex) {
                     V8FailureReason = ex;
 
@@ -191,7 +237,7 @@
                         "which isn't x86/amd64 on NT. Loading the Jurassic compiler, which is much slower.");
 
                     // Jurassic completely bites it on 64-bit, we just need to abort
-                    if (Environment.Is64BitProcess == false) {
+                    if (Environment.Is64BitProcess == true) {
                         throw;
                     }
 

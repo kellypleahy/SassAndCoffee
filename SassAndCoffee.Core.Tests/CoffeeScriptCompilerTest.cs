@@ -1,50 +1,42 @@
-﻿namespace SassAndCoffee.Core.Tests
-{
+﻿namespace SassAndCoffee.Core.Tests {
     using System;
-
-    using SassAndCoffee.Core.Compilers;
-
+    using SassAndCoffee.Core;
+    using SassAndCoffee.JavaScript;
+    using SassAndCoffee.JavaScript.CoffeeScript;
     using Xunit;
 
-    using SassAndCoffee.Core;
-
-    public class CoffeeScriptCompilerTest
-    {
+    public class CoffeeScriptCompilerTest {
         [Fact]
-        public void CoffeeScriptSmokeTest()
-        {
+        public void CoffeeScriptSmokeTest() {
             var input = @"v = x*5 for x in [1...10]";
-            var fixture = new CoffeeScriptCompiler();
+            using (var fixture = new CoffeeScriptCompiler(new InstanceProvider<IJavaScriptRuntime>(
+                () => new IEJavaScriptRuntime()))) {
 
-            var result = fixture.Compile(input);
-            Assert.False(String.IsNullOrWhiteSpace(result));
-        }
-
-        [Fact]
-        public void CoffeeScriptFailTest()
-        {
-            var input = "@#)$(@#)(@#_$)(@_)@ !!@_@@@ window.alert \"foo\" if 3>2 else if else if";
-            var fixture = new CoffeeScriptCompiler();
-
-            bool shouldDie = true;
-            
-            try {
                 var result = fixture.Compile(input);
-                Console.WriteLine(result);
-            } catch(Exception ex) {
-                Console.WriteLine("Ex: " + ex.Message);
-                shouldDie = false;
+                Assert.False(String.IsNullOrWhiteSpace(result));
             }
-
-            Assert.False(shouldDie);
         }
 
         [Fact]
-        public void V8CompilerLoadTest()
-        {
-            var fixture = JS.CreateJavascriptCompiler();
+        public void CoffeeScriptFailTest() {
+            var input = "test.invlid.stuff/^/g!%%";
+            using (var fixture = new CoffeeScriptCompiler(new InstanceProvider<IJavaScriptRuntime>(
+                () => new IEJavaScriptRuntime()))) {
 
-            Assert.False(fixture is JurassicCompiler);
+                bool shouldDie = false;
+
+                try {
+                    var result = fixture.Compile(input);
+                    if (result.StartsWith("ENGINE FAULT"))
+                        shouldDie = true;
+                    else Console.WriteLine(result);
+                } catch (Exception ex) {
+                    Console.WriteLine("Ex: " + ex.Message);
+                    shouldDie = true;
+                }
+
+                Assert.True(shouldDie);
+            }
         }
     }
 }
